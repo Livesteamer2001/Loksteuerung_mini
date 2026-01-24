@@ -1,6 +1,6 @@
 
 /*
-  Handsteuergerät Version 0.0
+  Handsteuergerät Version 0.8
   Software für Loksteuerung über ESP-NOW
   Andreas Hauschild 2026
   Prozessor: LOLIN(WEMOS) D1 mini (clone)
@@ -53,8 +53,9 @@ long timer_Licht_R;
 long switchTime = 500;      // Zeit, innerhalb der der Schalter nochmal betätigt werden muss für 2. Funktio
 long timer_buttonCheck;
 long TXTimer;
-long TXInterval = 500;
+long TXInterval = 200;
 unsigned long lastWifiUpdate = 0;
+int myRSSI = 0;
 
 typedef struct FST_message {
   int id;           // Identifizierung, sicher ist sicher...
@@ -74,7 +75,7 @@ typedef struct FST_message {
   bool Sound_2;
   bool Sound_3;
   bool Sound_4;
-} FST_message;
+} __attribute__((packed)) FST_message;
 
 typedef struct LST_message {
   int id;           // Identifizierung, sicher ist sicher...
@@ -84,7 +85,8 @@ typedef struct LST_message {
   int IMot2;        // Motorstrom 2, 10 Bit
   int Speed;        // Fahrgeschwindigkeit
   int Temp;         // Motortemperatur
-} LST_Message;
+  int RSSI;         // Empfangsfeldstärke, gespiegelt weil esp32 das einfacher kann
+} __attribute__((packed)) LST_Message;
 
 FST_message TXData;
 LST_message RXData;
@@ -94,15 +96,16 @@ RunningMedian samples = RunningMedian(10);
 // Variable to store if sending data was successful
 bool TXSuccess;
 int TXFailCounter = 0;
+bool speedLock = true; // Startet immer gesperrt (beim Einschalten)
 
 // Displaytreiber
-U8G2_SSD1306_128X32_UNIVISION_F_HW_I2C display(U8G2_R2); 
+U8G2_SSD1306_128X32_UNIVISION_F_HW_I2C display(U8G2_R2);  // 0.91" OLED 128x32
 
 
 class ToggleSwitch {
   private:
     const int PIN;
-    const unsigned long WINDOW = 1000; 
+    const unsigned long WINDOW = 750; 
     const unsigned long DEBOUNCE = 50; 
 
     int state = 0; 
@@ -255,7 +258,7 @@ void OnDataRecv(uint8_t * mac, uint8_t *incomingData, uint8_t len) {
 }
 
 void buttonCheck() {
-  if (millis() - timer_buttonCheck > 2 * switchTime){
+  /*if (millis() - timer_buttonCheck > 2 * switchTime){
     timer_buttonCheck = millis();
   // display test
     int aread = analogRead(Poti_Pin);
@@ -265,9 +268,9 @@ void buttonCheck() {
     display.setCursor(0, 15);
     display.drawGlyph(0, 15, 0x47);	// write something to the internal memory
     display.sendBuffer();					// transfer internal memory to the display
-    
+  }
     // buttons test
-    /*String msg = "Licht_F: ";
+    String msg = "Licht_F: ";
     msg += digitalRead(Licht_F_Pin);
     msg += " | Licht_R: ";
     msg += digitalRead(Licht_R_Pin);
@@ -301,87 +304,126 @@ void buttonCheck() {
 	msg += TXData.Fahrschalter; 
   msg += " | Poti: ";
   msg += analogRead(Poti_Pin);
+  msg += " | speedLock: ";
+  msg += speedLock;
+  msg += " | UBatt: ";
+  msg += RXData.UBatt;
     Serial.println(msg);
-  }
+  
 }
 
+
 void prepareMessage() {
-	if (swDir.getState() == 0) { 
-		TXData.Hptsch_ON = false; 
-	} else {
-		TXData.Hptsch_ON = true;
-	}
-	TXData.Richtung = swDir.getState();
-	TXData.Licht_F = swLicht_F.getState();
-	TXData.Licht_R = swLicht_R.getState();
-	TXData.Horn = !digitalRead(Horn_Pin);
-	int aread = analogRead(Poti_Pin);
-	TXData.Fahrschalter = map(aread, 2, 1024, 0, 99);
+  // 1. Verbindung prüfen: Wenn zu viele Pakete verloren gingen, Sperre rein
+  // Der Wert 20 ist ein Puffer. Sobald die Verbindung weg ist, wird gesperrt.
+  if (TXFailCounter > 10) {
+    speedLock = true;
+  }
+
+  int aread = analogRead(Poti_Pin);
+
+  if (swDir.getState() == 0) { 
+    TXData.Hptsch_ON = false; 
+    speedLock = true;
+  } else {
+    TXData.Hptsch_ON = true;
+  }
+  // Wenn gesperrt ist UND das Poti auf Null (bzw. < 10 wegen Rauschen) gedreht wird -> Entsperren
+  if (speedLock == true && aread < 10) {
+    speedLock = false;
+  }
+  
+  TXData.Richtung = swDir.getState();
+  TXData.Licht_F = swLicht_F.getState();
+  TXData.Licht_R = swLicht_R.getState();
+  TXData.Horn = !digitalRead(Horn_Pin);
+  
+  if (speedLock == true) {
+    // Wenn gesperrt, immer 0 senden, egal wo das Poti steht
+    TXData.Fahrschalter = 0;
+  } else {
+    // Wenn entsperrt, normalen Wert senden
+    // Hinweis: constrain verhindert, dass map negative Werte liefert, falls aread < 2 ist
+    TXData.Fahrschalter = map(constrain(aread, 2, 1024), 2, 1024, 0, 99);
+  }
 }
 
 void TXRX() {
   if (millis() - TXTimer > TXInterval) {
       TXTimer = millis();
       esp_now_send(broadcastAddress, (uint8_t *) &TXData, sizeof(TXData));
-
   }
   myDisplay();
 }
 
 void myDisplay() {
-  display.clearBuffer();					// clear the internal memory
-    display.setFont(u8g2_font_t0_16_tf);  // choose a suitable font at https://github.com/olikraus/u8g2/wiki/fntlistall
-   
-    switch (TXData.Richtung) {
-      case 0:
-        drawStatusCircle(9,16,8);
-        drawStatusCircle(9,16,2);
-        break;
-      case 1:
-        drawUpArrow(0,0,20,30);
-        break;
-      case 2:
-        drawDownArrow(0,0,20,30);
-        break;
-      default:
-        break;   
+  display.clearBuffer();          // clear the internal memory
+  display.setFont(u8g2_font_t0_16_tf);  // choose a suitable font
+
+  // --- Richtungspfeile zeichnen ---
+  switch (TXData.Richtung) {
+    case 0:
+      drawStatusCircle(9, 16, 8);
+      drawStatusCircle(9, 16, 2);
+      break;
+    case 1:
+      drawUpArrow(0, 0, 20, 30);
+      break;
+    case 2:
+      drawDownArrow(0, 0, 20, 30);
+      break;
+    default:
+      break;
+  }
+
+  // --- Funkstörung hat oberste Priorität ---
+  if (TXFailCounter > 8) {
+    //RXData.RSSI = 0;            
+    //if (digitalRead(UBatt_Pin) == LOW) TXFailCounter = 0; // Reset Möglichkeit
+    
+    if (isBlinkPhase(800)) {
+      display.setCursor(34, 16);
+      display.print(" Funk-");
+      display.setCursor(36, 29);
+      display.print("Störung");
     } 
-    if (TXFailCounter > 8) {
-      if (digitalRead(UBatt_Pin) == LOW) TXFailCounter = 0;                    // sonst wird die Spannung nicht angezeigt
-      if (isBlinkPhase(800)) {
-        display.setCursor(34,16);
-        display.print(" Funk-");
-        display.setCursor(36,29);
-        display.print("Störung");
-      } else {
-        display.setCursor(34,18);
-        display.print("  ");
-        display.setCursor(36,31);
-        display.print(" ");
-      }  
-    } else if (digitalRead(UBatt_Pin) == LOW) {
-      
+  } 
+  else {
+    // --- Verbindung OK: Entscheidung was angezeigt wird ---
+    
+    // 1. TEXT AUSGABE (Nullstellung hat Vorrang vor Akku-Text)
+    display.setCursor(30, 15);
+    
+    if (speedLock) {
+       // Wenn gesperrt -> WARNUNG
+       if (isBlinkPhase(900)) {
+          display.print("Poti -> 0 !"); 
+       }
+    } else {
+       // Wenn nicht gesperrt -> Zeige an, welcher Akku gerade gemessen wird
+       if (digitalRead(UBatt_Pin) == LOW) {
+         display.print("Senderakku");
+       } else {
+         display.print("Lok-Akku");
+       }
+    }
+
+    // 2. BATTERIE BALKEN (Unabhängig vom Text)
+    if (digitalRead(UBatt_Pin) == LOW) {
+      // Senderakku messen
       int reading = analogRead(Poti_Pin);
       samples.add(reading);
       int zustand = map(samples.getAverage(), 803, 955, 0, 100);
-      
-      display.setCursor(30, 16);
-      display.print("Senderakku");
-      drawBattery(35,20, zustand);
-    } else  {
+      drawBattery(35, 22, zustand);
+    } else {
+      // Lok-Akku aus Datenpaket nehmen
       int zustand = RXData.UBatt;
-      display.setCursor(30, 16);
-      display.print("Lok-Akku");
-      drawBattery(35,20, zustand);
-    } 
-    int myRSSI;
-    if (millis() - lastWifiUpdate > 2000) {
-      myRSSI = getSignalStrength();
-      lastWifiUpdate = millis();
+      drawBattery(35, 22, zustand);
     }
-    drawSignalStrength(104, 24, myRSSI);
-    //display.drawGlyph(0, 0, 0x47);	// write something to the internal memory
-    display.sendBuffer();					// transfer internal memory to the display
+  }
+
+  drawSignalStrength(104, 24, RXData.RSSI);
+  display.sendBuffer();         // transfer internal memory to the display
 }
 
 void drawUpArrow(int x, int y, int w, int h) {
@@ -420,29 +462,6 @@ void drawSignalStrength(int x, int y, int strength) {
   }
 }
 
-/* void drawBattery(int x, int y, int percent) {
-  // 1. Der äußere Rahmen (Gehäuse)
-  int safePercent = constrain(percent, 0, 100);
-  display.drawFrame(x, y, 20, 10);
-  
-  // 2. Der Pluspol-Nippel
-  display.drawBox(x + 20, y + 2, 2, 6);
-  
-  // 3. Den Ladezustand berechnen (0 bis 16 Pixel Breite im Inneren)
-  int barWidth = map(safePercent, 0, 100, 0, 16);
-   display.drawBox(x + 2, y + 2, barWidth, 6);
-  // 5. Zeichnen des Balkens (mit 2 Pixel Abstand zum Rand)
-  // Nur zeichnen, wenn überhaupt Ladung da ist
-  if (barWidth > 0) {
-    display.drawBox(x + 2, y + 2, barWidth, 6);
-  }
-
-  // 6. Optional: Prozentzahl daneben schreiben
-  display.setFont(u8g2_font_5x7_tr);
-  display.setCursor(x + 40, y + 8);
-  display.print(safePercent);
-  display.print("%");
-} */
 void drawBattery(int x, int y, int percent) {
   int safePercent = constrain(percent, 0, 100);
   
@@ -475,16 +494,6 @@ void drawBattery(int x, int y, int percent) {
   }
 }
 
-int getSignalStrength() {
-  if (WiFi.status() != WL_CONNECTED) return 0; // Kein WLAN = 0 Balken
-  long rssi = WiFi.RSSI();
-  if (rssi > -50) return 4;
-  if (rssi > -65) return 3;
-  if (rssi > -75) return 2;
-  if (rssi > -85) return 1;
-  return 0;
-}
-
 //>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 void setup() {
   Serial.begin(115200);
@@ -500,6 +509,8 @@ void setup() {
 
   // Set device as a Wi-Fi Station
   WiFi.mode(WIFI_STA);
+  int targetChannel = 0; 
+  WiFi.begin("DUMMY_SSID", "DUMMY_PASS", targetChannel, NULL, false);
   WiFi.disconnect();
 
   // Init ESP-NOW
@@ -526,6 +537,7 @@ void setup() {
   swDir.begin();
   TXData.id = TX_id;
   RXData.id = RX_id;
+  speedLock = true;     // Bocksprung verhindern
 }
 
 void loop() {
@@ -535,5 +547,5 @@ void loop() {
   prepareMessage();
   TXRX();
   
-  //buttonCheck();
+  buttonCheck();
 }
