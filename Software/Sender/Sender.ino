@@ -58,18 +58,18 @@ unsigned long lastWifiUpdate = 0;
 int myRSSI = 0;
 
 typedef struct FST_message {
-  int id;           // Identifizierung, sicher ist sicher...
-  int version;
-  int Fahrschalter; // Potiwert, umgesetzt auf 0 - 99   
-  bool Hptsch_ON;   // Hauptschalter
-  int Richtung;     // Richtungswahl: 0 Neutral | 1 Front | 2 Rück
-  int Bremse;       // tbd
-  int Licht_F;      // 1 Frontlicht  2 Rücklicht
-  int Licht_R;      // 1 Frontlicht  2 Rücklicht
+  uint8_t id = 100;           // Identifizierung, sicher ist sicher...
+  uint8_t version = 1;
+  uint8_t Fahrschalter = 0; // Potiwert, umgesetzt auf 0 - 99   
+  bool Hptsch_ON = false;   // Hauptschalter
+  uint8_t Richtung = 0;    // Richtungswahl: 0 Neutral | 1 Front | 2 Rück
+  uint8_t Bremse;       // tbd
+  uint8_t Licht_F = 0;      // 1 Frontlicht  2 Rücklicht
+  uint8_t Licht_R = 0;      // 1 Frontlicht  2 Rücklicht
   bool Licht_Fst;
   bool Panto_F;      
   bool Panto_R;
-  bool Horn;
+  bool Horn = false;
   bool Sound_ON;
   bool Sound_1;
   bool Sound_2;
@@ -78,8 +78,8 @@ typedef struct FST_message {
 } __attribute__((packed)) FST_message;
 
 typedef struct LST_message {
-  int id;           // Identifizierung, sicher ist sicher...
-  int version;
+  uint8_t id;           // Identifizierung, sicher ist sicher...
+  uint8_t version;
   int UBatt;        // Batteriespannung, 10 Bit
   int IMot1;        // Motorstrom 1, 10 Bit
   int IMot2;        // Motorstrom 2, 10 Bit
@@ -252,6 +252,9 @@ void OnDataSent(uint8_t *mac_addr, uint8_t sendStatus) {
 // Callback when data is received
 void OnDataRecv(uint8_t * mac, uint8_t *incomingData, uint8_t len) {
   memcpy(&RXData, incomingData, sizeof(RXData));
+  if (RXData.id != TXData.id) {
+
+  }
   Serial.print("Bytes received: ");
   Serial.println(len);
   
@@ -315,7 +318,7 @@ void buttonCheck() {
 
 void prepareMessage() {
   // 1. Verbindung prüfen: Wenn zu viele Pakete verloren gingen, Sperre rein
-  // Der Wert 20 ist ein Puffer. Sobald die Verbindung weg ist, wird gesperrt.
+  // Der Wert 10 ist ein Puffer. Sobald die Verbindung weg ist, wird gesperrt.
   if (TXFailCounter > 10) {
     speedLock = true;
   }
@@ -352,6 +355,8 @@ void TXRX() {
   if (millis() - TXTimer > TXInterval) {
       TXTimer = millis();
       esp_now_send(broadcastAddress, (uint8_t *) &TXData, sizeof(TXData));
+      // Optionaler Debug:
+       Serial.printf("Gesendet: %d Bytes\n", sizeof(TXData));
   }
   myDisplay();
 }
@@ -417,7 +422,15 @@ void myDisplay() {
       drawBattery(35, 22, zustand);
     } else {
       // Lok-Akku aus Datenpaket nehmen
-      int zustand = RXData.UBatt;
+      int zustand;
+      int safeUBatt = constrain(RXData.UBatt, 1410, 2955);
+      if (safeUBatt > 1600) {
+        zustand = map(safeUBatt, 2750, 2955, 0, 100);
+      } else {
+        zustand = map(safeUBatt, 1410, 1575, 0, 100);
+      }
+      
+
       drawBattery(35, 22, zustand);
     }
   }
@@ -538,6 +551,14 @@ void setup() {
   TXData.id = TX_id;
   RXData.id = RX_id;
   speedLock = true;     // Bocksprung verhindern
+  /*delay(2000);
+  Serial.print("Größe des TX-Pakets (FST_message): ");
+  Serial.print(sizeof(TXData));
+  Serial.println(" Bytes");
+
+  Serial.print("Größe des RX-Pakets (LST_message): ");
+  Serial.print(sizeof(RXData));
+  Serial.println(" Bytes");*
 }
 
 void loop() {
@@ -547,5 +568,5 @@ void loop() {
   prepareMessage();
   TXRX();
   
-  buttonCheck();
+  //buttonCheck();
 }
