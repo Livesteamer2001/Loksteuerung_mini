@@ -1,15 +1,16 @@
-
 /*
-  Loksteuergerät Version 0.0
+  Loksteuergerät Version 0.8
   Software für Loksteuerung über ESP-NOW
   Andreas Hauschild 2026
   Prozessor: ESP32-WROOM-DA
   Board-Version: esp32 Version 3.3.3
-
+  Messwerte UBatt:  12.7V: 1575   11.5V: 1410
+                    25.4V: 2955   23,0V: 2750
 
 
 
 */
+
 #include <Wire.h>
 #include <ESP32_NOW.h>
 #include <WiFi.h>
@@ -73,21 +74,21 @@ long E_BlinkTimer = 0;
 const int E_BlinkInterval = 1000; // Geschwindigkeit des Blinkens (ms)
 bool E_BlinkState = false;
 unsigned long lastBatteryUpdate = 0;
-const long batteryInterval = 10000; // 10 Sekunden in Millisekunden
+const long batteryInterval = 5000; // 5 Sekunden in Millisekunden
 
 typedef struct FST_message {
-  int id;           // Identifizierung, sicher ist sicher...
-  int version;
-  int Fahrschalter; // Potiwert, umgesetzt auf 0 - 99   
-  bool Hptsch_ON;   // Hauptschalter
-  int Richtung;     // Richtungswahl: 0 Neutral | 1 Front | 2 Rück
-  int Bremse;       // tbd
-  int Licht_F;      // 1 Frontlicht  2 Rücklicht
-  int Licht_R;      // 1 Frontlicht  2 Rücklicht
+  uint8_t id;           // Identifizierung, sicher ist sicher...
+  uint8_t version;
+  uint8_t Fahrschalter = 0; // Potiwert, umgesetzt auf 0 - 99   
+  bool Hptsch_ON = false;   // Hauptschalter
+  uint8_t Richtung = 0;    // Richtungswahl: 0 Neutral | 1 Front | 2 Rück
+  uint8_t Bremse;       // tbd
+  uint8_t Licht_F = 0;      // 1 Frontlicht  2 Rücklicht
+  uint8_t Licht_R = 0;      // 1 Frontlicht  2 Rücklicht
   bool Licht_Fst;
   bool Panto_F;      
   bool Panto_R;
-  bool Horn;
+  bool Horn = false;
   bool Sound_ON;
   bool Sound_1;
   bool Sound_2;
@@ -96,14 +97,14 @@ typedef struct FST_message {
 } __attribute__((packed)) FST_message;
 
 typedef struct LST_message {
-  int id;           // Identifizierung, sicher ist sicher...
-  int version;
+  uint8_t id = 100;           // Identifizierung, sicher ist sicher...
+  uint8_t version = 1;
   int UBatt;        // Batteriespannung, 10 Bit
   int IMot1;        // Motorstrom 1, 10 Bit
   int IMot2;        // Motorstrom 2, 10 Bit
   int Speed;        // Fahrgeschwindigkeit
   int Temp;         // Motortemperatur
-  int RSSI;         // Empfangsfeldstärke
+  int RSSI;         // Empfangsfeldstärke, gespiegelt weil esp32 das einfacher kann
 } __attribute__((packed)) LST_Message;
 
 FST_message RXData;
@@ -139,7 +140,7 @@ void OnDataRecv(const esp_now_recv_info_t *recv_info, const uint8_t *incomingDat
   memcpy(&RXData, incomingData, sizeof(RXData));
   
   // Debug-Ausgabe
-  //Serial.print("Bytes: "); Serial.print(len);
+  Serial.print("Bytes empfangen: "); Serial.println(len);
   //Serial.print(" | RSSI: "); Serial.print(lastRSSI); 
   //Serial.println(" dBm");
 
@@ -170,8 +171,8 @@ void showRX() {
 	msg += Licht_Rueck_F; 
 	msg += " | Licht_R_R: ";
 	msg += Licht_Rueck_R;  
-	msg += " | Horn: ";
-	msg += digitalRead(Horn_Pin); 
+	msg += " | UBatt: ";
+	msg += TXData.UBatt; 
   msg += " | lastRSSI: ";
   msg += lastRSSI;
 	msg += " | RSSI: ";
@@ -376,12 +377,25 @@ void setup() {
   peerInfo.channel = 0;  
   peerInfo.encrypt = false;
   
-  // Add peer        
+  Serial.println("Registrierung beendet...");
+  delay(100); // Dem Serial-Buffer Zeit geben
+
   if (esp_now_add_peer(&peerInfo) != ESP_OK){
-    Serial.println("Failed to add peer");
+    Serial.println("Fehler: Peer konnte nicht hinzugefügt werden");
     return;
   }
-  Serial.println("ESPNow abgeschlossen");
+  
+  Serial.println("Peer erfolgreich hinzugefügt!");
+  delay(100);
+
+  // WICHTIG: Prüfe hier, ob die Structs im Speicher okay sind
+  size_t txSize = sizeof(TXData);
+  size_t rxSize = sizeof(RXData);
+
+  Serial.printf("DEBUG: TX struct size: %d Bytes\n", txSize);
+  Serial.printf("DEBUG: RX struct size: %d Bytes\n", rxSize);
+  
+  Serial.println("Setup vollständig abgeschlossen.");
 }
 
 void loop() {
