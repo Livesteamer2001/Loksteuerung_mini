@@ -1,11 +1,12 @@
 /*
-  Loksteuergerät Version 0.9.2 RC3
+  Loksteuergerät Version 0.9.2 RC4
   Software für Loksteuerung über ESP-NOW
   Andreas Hauschild 2026
   Prozessor: ESP32-WROOM-DA
   Messwerte UBatt:  12.7V: 1575   11.5V: 1410
                     25.4V: 2955   23,0V: 2750
-  mit Autopair-Funktion, damit keine MAC mehr notwendig                   
+  mit Autopair-Funktion, damit keine MAC mehr notwendig    
+  RSSI-Rückmeldung reaktiviert               
 */
 
 #include <Wire.h>
@@ -135,6 +136,23 @@ float readUBatt() {
 // Callback für ESP32 Core 3.x
 void OnDataRecv(const esp_now_recv_info_t * info, const uint8_t *incomingData, int len) {
   const uint8_t *mac_addr = info->src_addr;
+
+  // RSSI Wert extrahieren und für den Sender auf 0-4 mappen
+  if (info->rx_ctrl != NULL) {
+    int rssiRaw = info->rx_ctrl->rssi; // Wert ist z.B. -65
+    
+    if (rssiRaw <= -90) {
+      TXData.RSSI = 0; // Kein oder extrem schlechtes Signal
+    } else if (rssiRaw <= -80) {
+      TXData.RSSI = 1; // Schwaches Signal
+    } else if (rssiRaw <= -70) {
+      TXData.RSSI = 2; // Ausreichendes Signal
+    } else if (rssiRaw <= -60) {
+      TXData.RSSI = 3; // Gutes Signal
+    } else {
+      TXData.RSSI = 4; // Sehr gutes Signal (besser als -60dBm)
+    }
+  }
 
   if (len == sizeof(Pairing_Message)) {
     Pairing_Message pMsg;
