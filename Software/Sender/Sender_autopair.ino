@@ -1,9 +1,10 @@
 /*
-  Handsteuergerät Version 0.9 RC3
+  Handsteuergerät Version 0.9 RC5
   Software für Loksteuerung über ESP-NOW
   Andreas Hauschild 2026
   Prozessor: LOLIN(WEMOS) D1 mini (clone)
-  Autopairing: Horn beim Einschalten > 10 sek drücken
+  Beim Starten muss Horn gedrückt werden, sonst kommt der uC nicht hoch!!
+  Autopairing: Horn beim Einschalten > 10 sek drücken, UBatt nach der Meldung "Systemstart..." kurz drücken
 */
 
 #include <ESP8266WiFi.h>
@@ -346,13 +347,12 @@ void setup() {
   display.setCursor(10, 20);
   display.print("System Start...");
   display.sendBuffer();
-
+  delay(800);
   EEPROM.begin(64); // EEPROM starten
-
   
   // --- 1. PAIRING CHECK (Horn Taste > 10 Sek) ---
-  //if (digitalRead(Horn_Pin) == LOW && digitalRead(UBatt_Pin) == LOW) {
-  if (digitalRead(Horn_Pin) == LOW) {  
+  if ((digitalRead(Horn_Pin) == LOW) && (digitalRead(UBatt_Pin) == LOW)) {
+  //if (digitalRead(Horn_Pin) == LOW) {  
     unsigned long startPress = millis();
     bool enterPairing = false;
     
