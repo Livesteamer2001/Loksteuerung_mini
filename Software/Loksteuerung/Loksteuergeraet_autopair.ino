@@ -1,12 +1,13 @@
 /*
-  Loksteuergerät Version 0.9.2 RC4
+  Loksteuergerät Version 0.9.2 RC5
   Software für Loksteuerung über ESP-NOW
   Andreas Hauschild 2026
   Prozessor: ESP32-WROOM-DA
   Messwerte UBatt:  12.7V: 1575   11.5V: 1410
                     25.4V: 2955   23,0V: 2750
   mit Autopair-Funktion, damit keine MAC mehr notwendig    
-  RSSI-Rückmeldung reaktiviert               
+  RSSI-Rückmeldung reaktiviert
+  Mit Reset für MAC-Pairing (Pin34 auf Masse legen)               
 */
 
 #include <Wire.h>
@@ -29,7 +30,8 @@ const int _4QD_ON_Pin       = 26;
 const int _4QD_DIR_Pin      = 33;
 const int Horn_Pin          = 32;
 const int Hallsensor_Pin    = 35;
-const int UBatt_Pin         = 34;
+const int UBatt_Pin         = 2;
+const int Reset_Pin         = 34;
 
 // Liste für Initialisierung
 const int ALL_OUTPUTS[] = {12, 13, 14, 27, 4, 16, 26, 33, 32};
@@ -186,10 +188,28 @@ void setup() {
   Serial.begin(115200);
   delay(1000);
   Serial.println("\n--- LOK START ---");
-
+  pinMode(Reset_Pin, INPUT);
   for (int i=0; i < NUM_OUTPUTS; i++) {
     pinMode(ALL_OUTPUTS[i], OUTPUT);
     digitalWrite(ALL_OUTPUTS[i], LOW);
+  }
+
+  // Wenn Pin 34 beim Start auf GND gezogen wird -> Reset
+  if (digitalRead(Reset_Pin) == LOW) {
+    Serial.println("!!! Werkseinstellung: Pairing wird gelöscht !!!");
+    
+    preferences.begin("lok_config", false);
+    preferences.clear(); 
+    preferences.end();
+
+    // Optische Bestätigung: Schnelles Blinken
+    pinMode(Licht_Front_F_Pin, OUTPUT);
+    for(int i=0; i<10; i++) {
+      digitalWrite(Licht_Front_F_Pin, !digitalRead(Licht_Front_F_Pin));
+      delay(100);
+    }
+    
+    Serial.println("Pairing gelöscht. Starte normal...");
   }
 
   WiFi.mode(WIFI_STA);
